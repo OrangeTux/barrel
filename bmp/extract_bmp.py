@@ -1,4 +1,5 @@
 import struct
+import hashlib
 import io
 import sys
 import argparse
@@ -56,7 +57,10 @@ class CustomBmpDumper:
         self.width = width
         self.height = height
         self.out_stride_in_bytes = align(self.width * self.bits_per_pixel, 32) // 8
+        print(f"yolo {self.out_stride_in_bytes}");
         self.out_image_size_in_byte = self.out_stride_in_bytes * self.height
+        print(f"size {self.out_image_size_in_byte}")
+
         
         has_palette = self.bits_per_pixel <= 8 and not (bpp_raw & CUSTOM_BMP_FLAG_NO_PALETTE)
         self.palette_size = pal_size_raw + 1 if has_palette else 0
@@ -73,7 +77,7 @@ class CustomBmpDumper:
             if len(pal_data) < 3: break
             b, g, r = struct.unpack("<BBB", pal_data)
 
-            print(f"{r} {g} {b} 0")
+            print(f"{b} {g} {r} 0")
 
             self.palette[i] = [b, g, r, 0]
         print("----")
@@ -88,6 +92,7 @@ class CustomBmpDumper:
         # File Header
         self.out.write(struct.pack("<2sIHHI", b'BM', out_data_offset + self.out_image_size_in_byte, 0, 0, out_data_offset))
         
+        print(f"swag {self.out_image_size_in_byte}")
         # Info Header
         self.out.write(struct.pack("<IiiHHIIiiII", 
             40, self.width, self.height, 1, self.bits_per_pixel, 
@@ -105,10 +110,12 @@ class CustomBmpDumper:
     def next_data(self):
         self.decompress_pos = 0
         header = self.reader.read(4)
-        if len(header) < 4: return
+        if len(header) < 4:
+            return
         
+        # The size of of the compressed bitmap and
+        # the size after decompression
         next_decomp_sz, next_comp_sz = struct.unpack("<HH", header)
-        print("next_data")
        
         if next_decomp_sz <= next_comp_sz:
             if next_decomp_sz > len(self.decompress_buffer):
@@ -127,63 +134,84 @@ class CustomBmpDumper:
 
         # This seem to be the entire image data
         compressed_data = self.reader.read(compressed_size)
-        c_idx = 0
+        cursor = 0
         
         # First byte 
-        self.decompress_buffer[self.decompress_pos] = compressed_data[c_idx]
+        self.decompress_buffer[self.decompress_pos] = compressed_data[cursor]
         self.decompress_pos += 1
-        c_idx += 1
+        cursor += 1
         
-        commands_end = False
-        # Iterate over every byte of the image data, 
-        # or when commands_end is False
-        while not commands_end and c_idx < len(compressed_data):
-            command_byte = compressed_data[c_idx]
-            c_idx += 1
-            # Why 8?
+        while cursor < len(compressed_data):
+            command_byte = compressed_data[cursor]
+            cursor += 1
+
+            # Iterate over all bits in the command byte,
+            # from MSB to LSB.
+            #
+            # If a bit is 0, the byte at the cursor is copied
+            # into the uncompressed buffer and the cursors position
+            # moves by 1 byte.
             for _ in range(8):
+                start = cursor
+                # If the 7tb bit is set, the next byte encodes 
                 # Check if the 7th bit is set.
                 # If not, just copy the byte from source to target.
                 #
                 # The first and second byte after a command byte have some special meaning.
-                #
-                # After uncompressing, I think the each byte 
+                # These bytes encode an offset (into  the color table?) and a length
                 # 
-                # 
-                if command_byte & 0x80:
-                    fle_byte = compressed_data[c_idx]
-                    c_idx += 1
-                    lower_nibble = fle_byte & 0x0F
-                    higher_nibble = fle_byte & 0xF0
-                    # The second byte after a cmd byte is some offset.
-                    rev_offset = (higher_nibble << 4) | compressed_data[c_idx]
-                    print(f"command byte: {command_byte},  fle_byte: {hex(fle_byte)}, rev offset: {rev_offset}, {compressed_data[c_idx]}")
-                    c_idx += 1
-                 
-                    if rev_offset == 0:
-                        commands_end = True
-                        break
-                    if rev_offset > self.decompress_pos:
-                        raise BmpDumpingException("Invalid compression offset")
-                        
-                    repeat_count = -(lower_nibble - 18) if lower_nibble else compressed_data[c_idx] + 18
-                    print(f"{lower_nibble} repeat count: {repeat_count}")
-                    if not lower_nibble: c_idx += 1
-                        
-                    # Copy by
-                    for _ in range(repeat_count):
-                        print(hex(self.decompress_buffer[self.decompress_pos - rev_offset]))
-                        self.decompress_buffer[self.decompress_pos] = \
-                            self.decompress_buffer[self.decompress_pos - rev_offset]
-                        self.decompress_pos += 1
-                else:
-                    self.decompress_buffer[self.decompress_pos] = compressed_data[c_idx]
+                if (command_byte & 0x80) != 128:
+                    self.decompress_buffer[self.decompress_pos] = compressed_data[cursor]
                     self.decompress_pos += 1
-                    c_idx += 1
+                    cursor += 1
+
+                    # Shift the bits one the the left.
+                    command_byte = (command_byte << 1) 
+                    continue
+    
+                # 1a_ and 2 are used to calculate the offset. This offset points to a byte 
+                # in the uncompressed buffer that must be repeated a bunch of times.
+                # 
+                # 1b is used determine the repeat count. Only if the repeat count is 18 or more,
+                # byte 3 is used. 
+                # +--------+--------+--------+ 
+                # + 1a  1b |    2   |    3   |  
+                # +--------+--------+--------+ 
+                _1 = compressed_data[cursor]
+                _1a = _1 & 0xF0
+                _1b = _1 & 0x0F
+
+                cursor += 1
+                _2 = compressed_data[cursor]
+
+                offset = (_1a  << 4) + _2
+                cursor += 1
+             
+                if offset == 0:
+                    return
+
+                if offset > self.decompress_pos:
+                    raise BmpDumpingException("Invalid compression offset")
+                    
+                if _1b == 0:
+                    # If _1b is 0, byte _3 is used to calculate the
+                    # repeat count. Repeat count is 18 the lowest.
+                    repeat_count = compressed_data[cursor] + 18
+                    cursor += 1
+                else:
+                    # Since _1b is a value between 1 and 15, the repeat count is a value
+                    # between 3 and 17 including including.
+                    repeat_count = 18 - _1b
+                     
+                data = [hex(x) for x in compressed_data[start:cursor]]
+                print(data)
+                for _ in range(repeat_count):
+                    self.decompress_buffer[self.decompress_pos] = \
+                        self.decompress_buffer[self.decompress_pos - offset]
+                    self.decompress_pos += 1
 
                 command_byte = (command_byte << 1) 
-                if commands_end: break
-        self.decompress_pos = 0
+        # self.decompress_pos = 0
 
     def write_data(self):
         # Width of a line in bytes.
@@ -242,6 +270,7 @@ def main():
             dumper.write()
             
         print(f"Success! Saved to {output_path}")
+        print(hashlib.md5(open(output_path,'rb').read()).hexdigest())
 
     except Exception as e:
         print(f"Error processing file: {e}")
