@@ -1,18 +1,39 @@
+use argh::FromArgs;
 use std::{
-    env,
-    fs::File,
+    fs::{File, canonicalize},
     io::{ErrorKind, Read, Write},
+    path::Path,
 };
 
 const LENGTH_HEADER: u32 = 14;
 const LENGTH_BITMAP_INFO_HEADER: u32 = 40;
 
-fn main() -> Result<(), std::io::Error> {
-    let mut args = env::args();
-    _ = args.next();
-    let file_name = args.next().unwrap();
+#[derive(FromArgs)]
+/// Transcode a BMP from Lego Racer's into a correct BMP file
+/// that follows the specification.
+struct Args {
+    #[argh(positional)]
+    input: String,
 
-    let mut file = File::open(&file_name)?;
+    /// location of the transcoded BMP file.
+    #[argh(option, short = 'o')]
+    output: Option<String>,
+}
+
+fn main() -> Result<(), std::io::Error> {
+    let args: Args = argh::from_env();
+    let input = canonicalize(Path::new(&args.input))?;
+    let output = match args.output {
+        Some(output) => canonicalize(Path::new(&output))?,
+        None => input.parent().unwrap().to_path_buf(),
+    };
+
+    let mut output_name = input.file_stem().expect("Input is not a file.").to_owned();
+
+    output_name.push("_transcoded.bmp");
+    let output = output.join(output_name);
+
+    let mut file = File::open(&input)?;
 
     let bits_per_pixel = take_u8(&mut file)?;
     let number_of_colors = take_u8(&mut file)?;
@@ -22,16 +43,13 @@ fn main() -> Result<(), std::io::Error> {
 
     let color_table = create_color_table(&mut file, number_of_colors)?;
 
-    println!("Color table size {}", color_table.len() * 4);
-    // Skip 3 bytes we don't need.
+    // TODO: figure out why these 3 bytes can be skipped.
     file.read_exact(&mut [0; 3])?;
 
     let bytes_per_row = (width_in_px * bits_per_pixel as u16) / 8;
     let bitmap = decompress_bitmap(&mut file, bytes_per_row)?;
 
-    // let bitmap = decompress_bitmap(&mut file, bytes_per_row)?;
-
-    let header = BmpHeader {
+    let bmp = BmpHeader {
         bits_per_pixel,
         height: height_in_px as i32,
         width: width_in_px as i32,
@@ -40,10 +58,8 @@ fn main() -> Result<(), std::io::Error> {
     }
     .to_vec();
 
-    File::create("/tmp/dump.bmp")
-        .unwrap()
-        .write_all(&header)
-        .unwrap();
+    println!("Transcoded BMP written to {}", &output.display());
+    File::create(output)?.write_all(&bmp)?;
 
     Ok(())
 }
@@ -149,10 +165,6 @@ fn decompress_bitmap(
             }
         };
         let compressed_size = take_u16(reader)?;
-
-        println!(
-            "The original bitmap is {original_size} bytes and it is compressed into {compressed_size} bytes"
-        );
 
         let mut compressed_bitmap = vec![0; compressed_size as usize];
         reader.read_exact(&mut compressed_bitmap).unwrap();
