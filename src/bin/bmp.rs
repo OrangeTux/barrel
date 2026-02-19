@@ -246,7 +246,7 @@ fn decompress_bitmap(
     // BMP files encode the images from bottom to top.
     // So the first row of pixels is encoded using the last bytes in the bitmap.
     // let height_in_px = original_size / bytes_per_row;
-    let height_in_px = 32;
+    let height_in_px = bitmap.len() / bytes_per_row as usize;
 
     let mut flipped_bitmap = Vec::with_capacity(bitmap.len());
     for y in (0..height_in_px as usize).rev() {
