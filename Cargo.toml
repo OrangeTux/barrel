@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 argh = { version = "0.1.14", default-features = false, features = ["help"] }
+flate2 = "1.1.9"
