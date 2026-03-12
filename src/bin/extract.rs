@@ -7,7 +7,7 @@ use flate2::{Decompress, FlushDecompress};
 use std::{
     fs::{File, canonicalize},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 const MAX_FILE_GROUP_COUNT: u8 = 71;
@@ -22,32 +22,59 @@ const MAX_FILE_GROUP_COUNT: u8 = 71;
 /// Extract contents of an InstallShield cabinet file
 #[derive(FromArgs)]
 struct Args {
-    /// path to an InstallShield cabinet file, usually ends with .cab
+    /// path to an InstallShield cabinet or file, usually named 'data1.cab'
     #[argh(option, short = 'f')]
     input: String,
 
-    /// where to extract files to
+    /// location where files are extracted to
     #[argh(option, short = 'o')]
     output: String,
 }
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-
     let args: Args = argh::from_env();
-    let input = canonicalize(Path::new(&args.input))
-        .wrap_err("Unable to locate input file")
+
+    let mut header_file_path = PathBuf::from(&args.input);
+
+    // The user can provide a path to the .hdr file, or the .cab file,
+    // or to the folder that contains these files.
+    match header_file_path.extension() {
+        Some(extension) => {
+            if extension == "cab" {
+                header_file_path.set_extension("hdr");
+            }
+        }
+        None => {
+            header_file_path = header_file_path.join("data1.hdr");
+        }
+    }
+
+    let input = canonicalize(&header_file_path)
+        .wrap_err("unable to locate the .hdr file")
         .suggestion(format!(
             "verify that {} exists and is readable.",
-            args.input
+            &header_file_path.display()
         ))?;
 
     let mut header_file = BufReader::new(
         File::open(&input)
-            .wrap_err("Unable to read input file")
+            .wrap_err("unable to read .hdr file")
             .suggestion(format!(
                 "verify that {} exists and is readable.",
-                args.input
+                header_file_path.display()
+            ))?,
+    );
+
+    let mut cabinet_file_path = header_file_path;
+    cabinet_file_path.set_extension("cab");
+
+    let mut cabinet_file = BufReader::new(
+        File::open(&cabinet_file_path)
+            .wrap_err("Unable to locate .cab file")
+            .suggestion(format!(
+                "verify that {} exists and is readable.",
+                &cabinet_file_path.display(),
             ))?,
     );
 
@@ -82,32 +109,21 @@ fn main() -> Result<()> {
         &directories,
     )?;
 
-    let mut data_file = input.clone();
-    data_file.set_extension("cab");
-    let mut data_file = BufReader::new(
-        File::open(&data_file)
-            .wrap_err("Unable to locate .cab file")
-            .suggestion(format!(
-                "verify that {} exists and is readable.",
-                args.input
-            ))?,
-    );
-
     for directory in &directories {
         let output = Path::new(&args.output).join(directory);
         std::fs::create_dir_all(output)?;
     }
 
     for fd in &file_descriptors {
-        data_file.seek(SeekFrom::Start(fd.data_offset as u64))?;
+        cabinet_file.seek(SeekFrom::Start(fd.data_offset as u64))?;
 
         let mut data = Vec::new();
         let mut bytes_left = fd.compressed_size;
         loop {
-            let segment_size = take_u16(&mut data_file)? as usize;
+            let segment_size = take_u16(&mut cabinet_file)? as usize;
 
             let mut segment: Vec<u8> = vec![0; segment_size];
-            data_file.read_exact(&mut segment)?;
+            cabinet_file.read_exact(&mut segment)?;
             segment.push(b'\0');
 
             bytes_left -= segment_size as u32 + 2;

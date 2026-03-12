@@ -4,19 +4,19 @@ Our shot to reimplement Lego Racers.
 
 ## Tools
 
-* [extract.rs](src/bin/extract.rs) - extract al files from a InstallShield archive.
+* [extract.rs](src/bin/extract.rs) - extract all files from `data1.cab`.
 * [jam.rs](src/bin/jam.rs) - extract the assets from a JAM file. 
 * [bmp.rs](src/bin/bmp.rs) - transcode Lego Racers custom BMP files into correct BMP.
 
 ## JAM
 
-The Lego Racers CD includes the file `data1.hdr`. 
+First, extract `data1.cab`:
 
 ```bash
 $ cargo run \
   --bin extract \
   -- \
-  --input /tmp/lego-racers/data1.hdr \
+  --input /tmp/lego-racers/data1.cab \
   --output /tmp/lego-racers
 
 Extracted "/tmp/Program Files Group/knight.tun".
