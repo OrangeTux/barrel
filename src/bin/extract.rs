@@ -1,4 +1,8 @@
 use argh::FromArgs;
+use color_eyre::{
+    Section,
+    eyre::{Context, Result, bail},
+};
 use flate2::{Decompress, FlushDecompress};
 use std::{
     fs::{File, canonicalize},
@@ -27,25 +31,34 @@ struct Args {
     output: String,
 }
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let args: Args = argh::from_env();
-    let input = canonicalize(Path::new(&args.input)).inspect_err(|err| {
-        eprintln!(
-            "Failed to locate input {}, does it exists?. The error is {err:?}",
+    let input = canonicalize(Path::new(&args.input))
+        .wrap_err("Unable to locate input file")
+        .suggestion(format!(
+            "verify that {} exists and is readable.",
             args.input
-        )
-    })?;
+        ))?;
+
     let mut header_file = BufReader::new(
         File::open(&input)
-            .inspect_err(|err| eprintln!("Failed to read input {}: {err:?}", input.display()))?,
+            .wrap_err("Unable to read input file")
+            .suggestion(format!(
+                "verify that {} exists and is readable.",
+                args.input
+            ))?,
     );
 
     let mut field = [0; 20];
-    header_file.read_exact(&mut field).inspect_err(|err| eprintln!("Failed to read the first 4 bytes of the JAM archive. Is it really an archive? The error is {err:?}"))?;
+    header_file.read_exact(&mut field).wrap_err(
+        "Unable to read first 20 bytes of the header. It looks you're input file is way to small.",
+    )?;
 
     let header: CommonHeader = field.into();
     if header.major_version() != 5 {
-        panic!(
+        bail!(
             "This tool only support InstallShield archives version 5. The provided archive is version {}",
             header.major_version()
         );
@@ -73,7 +86,11 @@ fn main() -> Result<(), std::io::Error> {
     data_file.set_extension("cab");
     let mut data_file = BufReader::new(
         File::open(&data_file)
-            .inspect_err(|err| eprintln!("Failed to read input {}: {err:?}", input.display()))?,
+            .wrap_err("Unable to locate .cab file")
+            .suggestion(format!(
+                "verify that {} exists and is readable.",
+                args.input
+            ))?,
     );
 
     for directory in &directories {
@@ -99,7 +116,7 @@ fn main() -> Result<(), std::io::Error> {
             let mut decompressor = Decompress::new(false);
             decompressor
                 .decompress(&segment, &mut output, FlushDecompress::Finish)
-                .unwrap();
+                .wrap_err(format!("Failed to decompress {}", fd.name))?;
             let bytes_written = decompressor.total_out() as usize;
             output.truncate(bytes_written);
             data.append(&mut output);
@@ -108,10 +125,18 @@ fn main() -> Result<(), std::io::Error> {
             };
         }
 
-        assert_eq!(data.len(), fd.expanded_size as usize);
+        if data.len() != fd.expanded_size as usize {
+            bail!(
+                "Failed to decompress {}: the uncompressed should be  {} bytes, but it is {} bytes instead",
+                fd.name,
+                data.len(),
+                fd.expanded_size,
+            );
+        }
+
         let output = Path::new(&args.output).join(&fd.directory).join(&fd.name);
         println!("Extracted {output:?}.");
-        std::fs::write(output, &data)?;
+        std::fs::write(output, &data).wrap_err("Failed to create file.")?;
     }
 
     println!("Extracted {} files.", file_descriptors.len());
