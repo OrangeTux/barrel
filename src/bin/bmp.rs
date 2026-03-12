@@ -1,3 +1,4 @@
+#![allow(clippy::just_underscores_and_digits)]
 use argh::FromArgs;
 use std::{
     fs::{File, canonicalize},
@@ -249,7 +250,7 @@ fn decompress_bitmap(
     let height_in_px = bitmap.len() / bytes_per_row as usize;
 
     let mut flipped_bitmap = Vec::with_capacity(bitmap.len());
-    for y in (0..height_in_px as usize).rev() {
+    for y in (0..height_in_px).rev() {
         let start = y * bytes_per_row as usize;
         let end = start + bytes_per_row as usize;
         flipped_bitmap.extend_from_slice(&bitmap[start..end]);

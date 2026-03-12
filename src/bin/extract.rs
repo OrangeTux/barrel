@@ -209,7 +209,7 @@ fn list_files<T>(
     header: &CommonHeader,
     file_table_offset: u32,
     entries_in_file_table: u32,
-    directories: &Vec<String>,
+    directories: &[String],
 ) -> Result<Vec<FileDescriptor>, std::io::Error>
 where
     T: Read + Seek + BufRead,
@@ -280,6 +280,7 @@ impl CommonHeader {
         (u32::from_le_bytes(self.version()) as usize >> 12) & 0xf
     }
 
+    #[allow(dead_code)]
     fn volume_info(&self) -> [u8; 4] {
         self.0[8..12].try_into().unwrap()
     }
@@ -288,10 +289,12 @@ impl CommonHeader {
         u32::from_le_bytes(self.0[12..16].try_into().unwrap())
     }
 
+    #[allow(dead_code)]
     fn cab_descriptor_size(&self) -> u32 {
         u32::from_le_bytes(self.0[16..20].try_into().unwrap())
     }
 
+    #[allow(dead_code)]
     fn cab_file_table_offset(&self) -> u32 {
         u32::from_le_bytes(self.0[..20].try_into().unwrap())
     }
@@ -337,12 +340,17 @@ where
 
 #[derive(Debug)]
 pub struct FileDescriptor {
+    #[allow(dead_code)]
     volume: u32,
     name: String,
     directory: String,
+
+    #[allow(dead_code)]
     flags: u16,
     expanded_size: u32,
     compressed_size: u32,
     data_offset: u32,
+
+    #[allow(dead_code)]
     md5: [u8; 0x10],
 }
